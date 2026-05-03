@@ -1,0 +1,3 @@
+tasks.db
+*.egg-info
+build
