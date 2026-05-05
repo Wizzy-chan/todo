@@ -22,8 +22,6 @@ To list all your to-dos (including completed):
 ```sh
 todo show-all
 ```
-```
-```
 
 To add a to-do:
 ```sh
@@ -43,6 +41,4 @@ todo mark [id]
 To unmark a to-do as complete:
 ```sh
 todo unmark [id]
-```
-```
 ```
