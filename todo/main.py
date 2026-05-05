@@ -2,7 +2,7 @@ from datetime import datetime
 from os import environ
 from pathlib import Path
 from sys import argv
-from typing import List, Optional, TypeVar
+from typing import Callable, List, NoReturn, Optional, TypeVar
 from sqlite3 import Connection, connect
 
 from todo.ANSI import ANSI, print_with_format
@@ -31,6 +31,11 @@ class Task:
     @staticmethod
     def get_all(conn: Connection) -> List["Task"]:
         result = conn.execute("SELECT * FROM tasks")
+        return [Task(conn, *row) for row in result.fetchall()]
+
+    @staticmethod
+    def get_uncompleted(conn: Connection) -> List["Task"]:
+        result = conn.execute("SELECT * FROM tasks WHERE completedat IS NULL")
         return [Task(conn, *row) for row in result.fetchall()]
 
     @staticmethod
@@ -85,71 +90,18 @@ class Task:
         )
 
 
-def print_task(task: Task):
-    print(f"[{task.id}] {task.name}")
-    print(f"    {task.description}")
-    if task.completedat:
-        print(f"    Completed at {task.completedat.strftime('%x %X')}")
-
-
-def add_task(conn: Connection):
-    print("Creating a new task")
-    name = input("Name: ")
-    description = input("Description: ")
-    task = Task.new(conn, name, description)
-    print(f"Successfully created task {name} with id {task.id}")
-
-
-def list_tasks(conn: Connection):
-    tasks = Task.get_all(conn)
-    for task in tasks:
-        print_task(task)
-
-
-def complete_task(conn: Connection, id: str):
-    task = Task.get(conn, id)
-    if not task:
-        print_err(f"Error: No task with id {id}")
-        return
-
-    task.completedat = datetime.now()
-    task.save()
-    print(f"Successfully marked task {task.name} as completed")
-
-
-def delete_task(conn: Connection, id: str):
-    task = Task.get(conn, id)
-    if not task:
-        print_err(f"Error: No task with id {id}")
-        return
-
-    task.delete()
-    print(f"Successfully deleted task {task.name}")
-
-
-def print_usage(program_name: str):
-    print("Usage:")
-    print(f"\t{program_name} [command]")
-    print()
-    print("Commands:")
-    print("\tadd      - Add a task")
-    print("\tcomplete - Complete a task")
-    print("\tdelete   - Delete a task")
-    print("\thelp     - Print this message")
-    print("\tlist     - Lists all saved tasks")
-
-
 def shift(arr: List[T]) -> Optional[T]:
     if len(arr) == 0:
         return None
     return arr.pop(0)
 
 
-def print_err(string: str):
-    print_with_format(ANSI.RED, string)
+def error(string: str, exit_code: int = 1) -> NoReturn:
+    print_with_format(ANSI.RED, "Error: " + string)
+    exit(exit_code)
 
 
-def xdg_data_home():
+def xdg_data_home() -> Path:
     default_path = Path.home() / ".local/share"
     xdg_data_home = environ.get("XDG_DATA_HOME")
     if not xdg_data_home:
@@ -160,36 +112,127 @@ def xdg_data_home():
     return xdg_data_home_path
 
 
-def main() -> int:
-    args = argv
-    program_name = shift(args)
-    assert program_name is not None  # argv[0] is always present
+commands = {}
 
-    cmd = shift(args) or "list"
 
-    db_path = (Path.cwd() if DEBUG else xdg_data_home()) / "tasks.db"
-    with connect(db_path) as conn:
-        Task.initialise_table(conn)
-        if cmd == "add":
-            add_task(conn)
-        elif cmd == "complete":
-            id = shift(args)
-            if not id:
-                print_err("Error: complete command requires id")
-                return 1
-            complete_task(conn, id)
-        elif cmd == "delete":
-            id = shift(args)
-            if not id:
-                print_err("Error: delete command requires id")
-                return 1
-            delete_task(conn, id)
-        elif cmd == "help":
-            print_usage(program_name)
-        elif cmd == "list":
-            list_tasks(conn)
-        else:
-            print_with_format(ANSI.RED, f"Error: Unknown command {cmd}")
-            print_usage(program_name)
+# TODO: Callable[[List[str]], None] is kind of annoying.
+#       Maybe we can use the inspect module to work out
+#       arity (min/max) and automatically split the input
+#       Also maybe the function could return an exit code.
+def command(function: Callable[[List[str]], None]) -> Callable[[List[str]], None]:
+    commands[function.__name__.replace("_", "-")] = function
+    return function
 
-    return 0
+
+def connect_to_db() -> Connection:
+    if DEBUG:
+        db_path = Path.cwd() / "tasks.db"
+    else:
+        db_path = xdg_data_home() / "tasks.db"
+
+    conn = connect(db_path)
+    Task.initialise_table(conn)
+    return conn
+
+
+def print_task(task: Task) -> None:
+    print(f"[{task.id}] {task.name}")
+    print(f"    {task.description}")
+    if task.completedat:
+        print(f"    Completed at {task.completedat.strftime('%x %X')}")
+
+
+@command
+def add(args: List[str]) -> None:
+    """Create a new task"""
+    if len(args) != 0:
+        # TODO: Maybe we can add a way to make a task from arguments
+        error("The add command does not take any arguments")
+    conn = connect_to_db()
+    print("Creating a new task")
+    name = input("Name: ")
+    description = input("Description: ")
+    task = Task.new(conn, name, description)
+    print(f"Successfully created task '{name}' with id {task.id}")
+
+
+@command
+def show(args: List[str]) -> None:
+    """Show uncompleted tasks, this is the default behaviour if no command is provided"""
+    if len(args) != 0:
+        error("The list command does not take any arguments")
+    conn = connect_to_db()
+    tasks = Task.get_uncompleted(conn)
+    for task in tasks:
+        print_task(task)
+
+
+@command
+def show_all(args: List[str]) -> None:
+    """Show all tasks"""
+    if len(args) != 0:
+        error("The list-all command does not take any arguments")
+    conn = connect_to_db()
+    tasks = Task.get_all(conn)
+    for task in tasks:
+        print_task(task)
+
+
+@command
+def mark(args: List[str]) -> None:
+    """Mark a task as completed"""
+    if len(args) != 1:
+        error("The mark command takes in exactly one argument: id")
+    id = args[0]
+    conn = connect_to_db()
+    task = Task.get(conn, id) or error(f"No task with id {id}")
+    task.completedat = datetime.now()
+    task.save()
+    print(f"Successfully marked task '{task.name}' as completed")
+
+
+@command
+def unmark(args: List[str]) -> None:
+    """Unmark a task as completed"""
+    if len(args) != 1:
+        error("The unmark command takes in exactly one argument: id")
+    id = args[0]
+    conn = connect_to_db()
+    task = Task.get(conn, id) or error(f"No task with id {id}")
+    task.completedat = None
+    task.save()
+    print(f"Successfully unmarked task '{task.name}'")
+    pass
+
+
+@command
+def delete(args: List[str]) -> None:
+    """Delete a task"""
+    if len(args) != 1:
+        error("The delete command takes exactly one argument: id")
+    id = args[0]
+    conn = connect_to_db()
+    task = Task.get(conn, id) or error(f"No task with id {id}")
+    task.delete()
+    print(f"Successfully deleted task {task.name}")
+
+
+def main():
+    args = argv[1:]
+    command = shift(args) or "show"
+    command_fn = commands.get(command)
+
+    if not command_fn:
+        print("Usage:")
+        print(f"\t{argv[0]} [command]")
+        print()
+        print("Commands:")
+        longest = max(len(name) for name in commands.keys())
+        for name, function in commands.items():
+            print(f"\t{name:<{longest}} - {function.__doc__}")
+        print(f"\t{'help':<{longest}} - Print this help message")
+        if command != "help":
+            error(f"Unknown command {command}")
+        exit(0)
+
+    command_fn(args)

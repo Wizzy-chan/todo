@@ -1,3 +1,4 @@
 tasks.db
 *.egg-info
 build
+__pycache__

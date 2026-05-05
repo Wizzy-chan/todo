@@ -1,21 +1,28 @@
 # todo
 
-A basic to-do CLI with no external dependencies.  
+A basic to-do CLI with no external dependencies.
 
 ## Install
 
 Install using pipx:
 
 ```sh
-pipx install .
+pipx install git+https://github.com/Wizzy-chan/todo.git
 ```
 
 ## Usage
 
-To list all your to-dos (e.g. in your `.bashrc`):
+To list all your uncompleted to-dos (e.g. in your `.bashrc`):
 ```sh
 todo
-todo list
+todo show
+```
+
+To list all your to-dos (including completed):
+```sh
+todo show-all
+```
+```
 ```
 
 To add a to-do:
@@ -30,6 +37,12 @@ todo delete [id]
 
 To mark a to-do as complete:
 ```sh
-todo complete [id]
+todo mark [id]
 ```
 
+To unmark a to-do as complete:
+```sh
+todo unmark [id]
+```
+```
+```
