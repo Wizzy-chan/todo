@@ -1,14 +1,15 @@
 from datetime import datetime
+from functools import wraps
+from inspect import signature
 from os import environ
 from pathlib import Path
-from sys import argv
-from typing import Callable, List, NoReturn, Optional, TypeVar
 from sqlite3 import Connection, connect
+from sys import argv
+from typing import List, NoReturn, Optional
 
 from todo.ANSI import ANSI, print_with_format
 
 DEBUG = bool("VIRTUAL_ENV" in environ)
-T = TypeVar("T")
 
 
 class Task:
@@ -90,7 +91,7 @@ class Task:
         )
 
 
-def shift(arr: List[T]) -> Optional[T]:
+def shift[T](arr: List[T]) -> Optional[T]:
     if len(arr) == 0:
         return None
     return arr.pop(0)
@@ -115,12 +116,29 @@ def xdg_data_home() -> Path:
 commands = {}
 
 
-# TODO: Callable[[List[str]], None] is kind of annoying.
-#       Maybe we can use the inspect module to work out
-#       arity (min/max) and automatically split the input
-#       Also maybe the function could return an exit code.
-def command(function: Callable[[List[str]], None]) -> Callable[[List[str]], None]:
-    commands[function.__name__.replace("_", "-")] = function
+def command(function):
+    """
+    Registers a command that can be run from the terminal
+    `function` MUST accept a fixed number of non-optional string arguments.
+    """
+    command_name = function.__name__.replace("_", "-")
+
+    @wraps(function)
+    def wrapped_function(command_line: List[str]):
+        sig = signature(function)
+        arity = len(sig.parameters)
+        if len(command_line) != arity:
+            error(
+                f"Command '{command_name}' accepts {arity} arguments but {len(command_line)} were provided"
+            )
+
+        args = []
+        for i in range(arity):
+            args.append(command_line[i])
+
+        function(*args)
+
+    commands[command_name] = wrapped_function
     return function
 
 
@@ -143,11 +161,9 @@ def print_task(task: Task) -> None:
 
 
 @command
-def add(args: List[str]) -> None:
+def add() -> None:
     """Create a new task"""
-    if len(args) != 0:
-        # TODO: Maybe we can add a way to make a task from arguments
-        error("The add command does not take any arguments")
+    # TODO: Maybe we can add a way to make a task from arguments
     conn = connect_to_db()
     print("Creating a new task")
     name = input("Name: ")
@@ -157,10 +173,8 @@ def add(args: List[str]) -> None:
 
 
 @command
-def show(args: List[str]) -> None:
+def show() -> None:
     """Show uncompleted tasks, this is the default behaviour if no command is provided"""
-    if len(args) != 0:
-        error("The list command does not take any arguments")
     conn = connect_to_db()
     tasks = Task.get_uncompleted(conn)
     for task in tasks:
@@ -168,10 +182,8 @@ def show(args: List[str]) -> None:
 
 
 @command
-def show_all(args: List[str]) -> None:
+def show_all() -> None:
     """Show all tasks"""
-    if len(args) != 0:
-        error("The list-all command does not take any arguments")
     conn = connect_to_db()
     tasks = Task.get_all(conn)
     for task in tasks:
@@ -179,11 +191,8 @@ def show_all(args: List[str]) -> None:
 
 
 @command
-def mark(args: List[str]) -> None:
+def mark(id: str) -> None:
     """Mark a task as completed"""
-    if len(args) != 1:
-        error("The mark command takes in exactly one argument: id")
-    id = args[0]
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.completedat = datetime.now()
@@ -192,11 +201,8 @@ def mark(args: List[str]) -> None:
 
 
 @command
-def unmark(args: List[str]) -> None:
+def unmark(id: str) -> None:
     """Unmark a task as completed"""
-    if len(args) != 1:
-        error("The unmark command takes in exactly one argument: id")
-    id = args[0]
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.completedat = None
@@ -206,15 +212,24 @@ def unmark(args: List[str]) -> None:
 
 
 @command
-def delete(args: List[str]) -> None:
+def delete(id: str) -> None:
     """Delete a task"""
-    if len(args) != 1:
-        error("The delete command takes exactly one argument: id")
-    id = args[0]
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.delete()
     print(f"Successfully deleted task {task.name}")
+
+
+@command
+def help() -> None:
+    """Print this help message"""
+    print("Usage:")
+    print(f"\t{argv[0]} [command]")
+    print()
+    print("Commands:")
+    longest = max(len(name) for name in commands.keys())
+    for name, function in commands.items():
+        print(f"\t{name:<{longest}} - {function.__doc__}")
 
 
 def main():
@@ -223,16 +238,7 @@ def main():
     command_fn = commands.get(command)
 
     if not command_fn:
-        print("Usage:")
-        print(f"\t{argv[0]} [command]")
-        print()
-        print("Commands:")
-        longest = max(len(name) for name in commands.keys())
-        for name, function in commands.items():
-            print(f"\t{name:<{longest}} - {function.__doc__}")
-        print(f"\t{'help':<{longest}} - Print this help message")
-        if command != "help":
-            error(f"Unknown command {command}")
-        exit(0)
+        help()
+        error(f"Unknown command {command}")
 
     command_fn(args)
