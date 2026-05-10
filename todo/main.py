@@ -5,7 +5,7 @@ from os import environ
 from pathlib import Path
 from sqlite3 import Connection, connect
 from sys import argv
-from typing import List, NoReturn, Optional
+from typing import Callable, List, NoReturn, Optional
 
 from todo.ANSI import ANSI, print_with_format
 
@@ -19,6 +19,7 @@ class Task:
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY,
                 content TEXT,
+                tag TEXT,
                 completedat DATETIME
             )
             """)
@@ -34,15 +35,18 @@ class Task:
         return [Task(conn, *row) for row in result.fetchall()]
 
     @staticmethod
-    def get_uncompleted(conn: Connection) -> List["Task"]:
-        result = conn.execute("SELECT * FROM tasks WHERE completedat IS NULL")
+    def get_sql(conn: Connection, condition: str, *args: str) -> List["Task"]:
+        # TODO: Convert this into some sort of general get_all(conditions) function
+        #       i.e. get_all(tag="tag", completed=False) where we build a single SQL
+        #       query instead of requiring the caller to write SQL
+        result = conn.execute("SELECT * FROM tasks WHERE " + condition, args)
         return [Task(conn, *row) for row in result.fetchall()]
 
     @staticmethod
-    def new(conn: Connection, content: str) -> "Task":
+    def new(conn: Connection, content: str, tag: Optional[str] = None) -> "Task":
         result = conn.execute(
-            "INSERT INTO tasks(content) VALUES (?) RETURNING *",
-            (content,),
+            "INSERT INTO tasks(content, tag) VALUES (?, ?) RETURNING *",
+            (content, tag),
         )
         task = Task(conn, *result.fetchone())
         conn.commit()
@@ -53,11 +57,13 @@ class Task:
         conn: Connection,
         id: str,
         content: str,
+        tag: Optional[str] = None,
         completedat: Optional[int] = None,
     ) -> None:
         self.conn = conn
         self.id = id
         self.content = content
+        self.tag = tag
         self.completedat = datetime.fromtimestamp(completedat) if completedat else None
 
     def completed(self) -> bool:
@@ -65,9 +71,10 @@ class Task:
 
     def save(self) -> None:
         self.conn.execute(
-            "UPDATE tasks SET content = ?, completedat = ? WHERE id = ?",
+            "UPDATE tasks SET content = ?, tag = ?, completedat = ? WHERE id = ?",
             (
                 self.content,
+                self.tag,
                 self.completedat.timestamp() if self.completedat else None,
                 self.id,
             ),
@@ -111,27 +118,26 @@ def xdg_data_home() -> Path:
 commands = {}
 
 
-def command(function):
-    """
-    Registers a command that can be run from the terminal
-    `function` MUST accept a fixed number of non-optional string arguments.
-    """
+def command[**P](function: Callable[P, None]) -> Callable[P, None]:
     command_name = function.__name__.replace("_", "-")
 
     @wraps(function)
     def wrapped_function(command_line: List[str]):
-        sig = signature(function)
-        arity = len(sig.parameters)
-        if len(command_line) != arity:
-            error(
-                f"Command '{command_name}' accepts {arity} arguments but {len(command_line)} were provided"
-            )
-
         args = []
-        for i in range(arity):
-            args.append(command_line[i])
-
-        function(*args)
+        kwargs = {}
+        while arg := shift(command_line):
+            if arg.startswith("--"):
+                kwarg_name = arg[2:]
+                if kwarg_name in kwargs:
+                    error(f"Repeat value provided for '{kwarg_name}'")
+                kwarg_value = shift(command_line) or error(
+                    f"No value provided for option '{kwarg_name}'"
+                )
+                kwargs[kwarg_name] = kwarg_value
+            else:
+                args.append(arg)
+        arguments = signature(function).bind(*args, **kwargs)
+        function(*arguments.args, **arguments.kwargs)
 
     commands[command_name] = wrapped_function
     return function
@@ -149,42 +155,50 @@ def connect_to_db() -> Connection:
 
 
 def print_task(task: Task) -> None:
-    print(f"[{task.id}] {task.content}")
+    print(f"[{task.id}] {task.content}" + (f"#{task.tag}" if task.tag else ""))
     if task.completedat:
         print(f"    Completed at {task.completedat.strftime('%x %X')}")
 
 
 @command
-def add() -> None:
+def add(*content: str, tag: Optional[str] = None) -> None:
     """Create a new task"""
-    # TODO: Maybe we can add a way to make a task from arguments
+    if len(content) == 0:
+        error("No task content provided")
     conn = connect_to_db()
     print("Creating a new task")
-    name = input("Name: ")
-    task = Task.new(conn, name)
-    print(f"Successfully created task '{name}' with id {task.id}")
+    task = Task.new(conn, " ".join(content), tag)
+    print(f"Successfully created task '{task.content}' with id {task.id}")
 
 
 @command
-def show() -> None:
+def show(tag: Optional[str] = None, /) -> None:
     """Show uncompleted tasks, this is the default behaviour if no command is provided"""
     conn = connect_to_db()
-    tasks = Task.get_uncompleted(conn)
+    if tag:
+        tasks = Task.get_sql(conn, "completedat IS NULL AND tag = ?", tag)
+    else:
+        tasks = Task.get_sql(conn, "completedat IS NULL")
+
     for task in tasks:
         print_task(task)
 
 
 @command
-def show_all() -> None:
+def show_all(tag: Optional[str] = None, /) -> None:
     """Show all tasks"""
     conn = connect_to_db()
-    tasks = Task.get_all(conn)
+    if tag:
+        tasks = Task.get_sql(conn, "tag = ?", tag)
+    else:
+        tasks = Task.get_all(conn)
+
     for task in tasks:
         print_task(task)
 
 
 @command
-def mark(id: str) -> None:
+def mark(id: str, /) -> None:
     """Mark a task as completed"""
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
@@ -194,7 +208,7 @@ def mark(id: str) -> None:
 
 
 @command
-def unmark(id: str) -> None:
+def unmark(id: str, /) -> None:
     """Unmark a task as completed"""
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
@@ -205,7 +219,7 @@ def unmark(id: str) -> None:
 
 
 @command
-def delete(id: str) -> None:
+def delete(id: str, /) -> None:
     """Delete a task"""
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
