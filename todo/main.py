@@ -9,7 +9,7 @@ from typing import List, NoReturn, Optional
 
 from todo.ANSI import ANSI, print_with_format
 
-DEBUG = bool("VIRTUAL_ENV" in environ)
+DEBUG = bool("TODO_DEBUG" in environ)
 
 
 class Task:
