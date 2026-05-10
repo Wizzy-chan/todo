@@ -18,8 +18,7 @@ class Task:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY,
-                name TEXT,
-                description TEXT,
+                content TEXT,
                 completedat DATETIME
             )
             """)
@@ -40,10 +39,10 @@ class Task:
         return [Task(conn, *row) for row in result.fetchall()]
 
     @staticmethod
-    def new(conn: Connection, name: str, description: str) -> "Task":
+    def new(conn: Connection, content: str) -> "Task":
         result = conn.execute(
-            "INSERT INTO tasks(name, description) VALUES (?, ?) RETURNING *",
-            (name, description),
+            "INSERT INTO tasks(content) VALUES (?) RETURNING *",
+            (content,),
         )
         task = Task(conn, *result.fetchone())
         conn.commit()
@@ -53,14 +52,12 @@ class Task:
         self,
         conn: Connection,
         id: str,
-        name: str,
-        description: str,
+        content: str,
         completedat: Optional[int] = None,
     ) -> None:
         self.conn = conn
         self.id = id
-        self.name = name
-        self.description = description
+        self.content = content
         self.completedat = datetime.fromtimestamp(completedat) if completedat else None
 
     def completed(self) -> bool:
@@ -68,10 +65,9 @@ class Task:
 
     def save(self) -> None:
         self.conn.execute(
-            "UPDATE tasks SET name = ?, description = ?, completedat = ? WHERE id = ?",
+            "UPDATE tasks SET content = ?, completedat = ? WHERE id = ?",
             (
-                self.name,
-                self.description,
+                self.content,
                 self.completedat.timestamp() if self.completedat else None,
                 self.id,
             ),
@@ -85,8 +81,7 @@ class Task:
     def __repr__(self) -> str:
         return (
             f"Task({repr(self.id)}, "
-            + f"{repr(self.name)}, "
-            + f"{repr(self.description)}, "
+            + f"{repr(self.content)}, "
             + f"{self.completedat.timestamp() if self.completedat else None})"
         )
 
@@ -154,8 +149,7 @@ def connect_to_db() -> Connection:
 
 
 def print_task(task: Task) -> None:
-    print(f"[{task.id}] {task.name}")
-    print(f"    {task.description}")
+    print(f"[{task.id}] {task.content}")
     if task.completedat:
         print(f"    Completed at {task.completedat.strftime('%x %X')}")
 
@@ -167,8 +161,7 @@ def add() -> None:
     conn = connect_to_db()
     print("Creating a new task")
     name = input("Name: ")
-    description = input("Description: ")
-    task = Task.new(conn, name, description)
+    task = Task.new(conn, name)
     print(f"Successfully created task '{name}' with id {task.id}")
 
 
@@ -197,7 +190,7 @@ def mark(id: str) -> None:
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.completedat = datetime.now()
     task.save()
-    print(f"Successfully marked task '{task.name}' as completed")
+    print(f"Successfully marked task '{task.content}' as completed")
 
 
 @command
@@ -207,7 +200,7 @@ def unmark(id: str) -> None:
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.completedat = None
     task.save()
-    print(f"Successfully unmarked task '{task.name}'")
+    print(f"Successfully unmarked task '{task.content}'")
     pass
 
 
@@ -217,7 +210,7 @@ def delete(id: str) -> None:
     conn = connect_to_db()
     task = Task.get(conn, id) or error(f"No task with id {id}")
     task.delete()
-    print(f"Successfully deleted task {task.name}")
+    print(f"Successfully deleted task {task.content}")
 
 
 @command
